@@ -1,0 +1,1051 @@
+#include <QtSql/QSqlDatabase>
+#include <QtSql/QSqlQuery>
+#include <QSqlRelationalDelegate>
+#include <QSqlRelationalTableModel>
+#include "diagnosticsetting.h"
+#include "noeditabledelegate.h"
+#include "dbaccess.h"
+#include "dbrepsettings.h"
+#include "ui_diagnosticsetting_form.h"
+
+
+DiagnosticSetting::DiagnosticSetting(QWidget *parent)
+    : QWidget(parent),
+    UI (new Ui::DiagnosticSetting_form)
+{
+    UI->setupUi(this);
+  	
+    bool con_flag;
+    dbaccess = new DBAccess;
+    settings = new DBRepSettings();
+    modelDB = new DiagnosticModel();
+    con_flag = dbaccess->createConnection("QSQLITE", settings->getDbName());
+    UI->systemtreeView->setContextMenuPolicy(Qt::CustomContextMenu);
+    UI->tableView_check->setContextMenuPolicy(Qt::CustomContextMenu);
+    UI->tableView_result->setContextMenuPolicy(Qt::CustomContextMenu);
+    UI->systemtreeView->setAnimated(true);
+
+    param_model = new QStandardItemModel();
+    state_model = new QStandardItemModel();
+    subSystem_model = new QStandardItemModel();
+    model_combo = new QStandardItemModel();
+    modelMain = new QSqlRelationalTableModel(this);
+    modelState = new QSqlRelationalTableModel(this);
+
+    UI->tableViewParam->setModel(param_model);
+    UI->tableViewState->setModel(state_model);
+    QStringList header_param_list, header_state_list;
+    header_param_list <<"Param_name"<<"Param_description";
+    header_state_list <<"State_name"<<"State_description";
+    param_model->setHorizontalHeaderLabels(header_param_list);
+    state_model->setHorizontalHeaderLabels(header_state_list);
+    UI->tableViewParam->horizontalHeader()->setSectionResizeMode(1,QHeaderView::Stretch);
+    UI->tableViewState->horizontalHeader()->setSectionResizeMode(1,QHeaderView::Stretch);
+
+//=============================== CONNECT ===================================================================
+    connect(UI->systemtreeView,SIGNAL(customContextMenuRequested(const QPoint &)),this,SLOT(customMenuTree(const QPoint &)));
+    connect(UI->tableView_check,SIGNAL(customContextMenuRequested(const QPoint &)),this,SLOT(customMenuTableCheck(const QPoint &)));
+    connect(UI->tableView_result,SIGNAL(customContextMenuRequested(const QPoint &)),this,SLOT(customMenuTableResult(const QPoint &)));
+    connect(UI->systemtreeView,SIGNAL(doubleClicked(const QModelIndex &)),this,SLOT(item_clicked( const QModelIndex & )));
+
+ //   connect(UI->tabWidget,SIGNAL(tabBarClicked(int)),this,SLOT(start_checking(int)));
+    connect(UI->toolButtonAddParam,SIGNAL(clicked()),this,SLOT(add_param_row()));
+    connect(UI->toolButtonAddState,SIGNAL(clicked()),this,SLOT(add_state_row()));
+    connect(UI->toolButtonDelParam,SIGNAL(clicked()),this,SLOT(del_param_row()));
+    connect(UI->toolButtonDelState,SIGNAL(clicked()),this,SLOT(del_state_row()));
+  //  connect(UI->toolButtonChekParam,SIGNAL(clicked()),this,SLOT(enter_param()));
+    connect(UI->radioButton_param,SIGNAL(clicked(bool)),this,SLOT(checking_param(bool)));
+    connect(UI->radioButton_state,SIGNAL(clicked(bool)),this,SLOT(checking_state(bool)));
+    connect(UI->toolButtonChekParam,SIGNAL(clicked()),this,SLOT(checking_record()));
+    connect(UI->toolButtonCheckResult,SIGNAL(clicked()),this,SLOT(checking_result()));
+    connect(UI->tableView_check,SIGNAL(clicked(QModelIndex)),this,SLOT(enter_param(QModelIndex)));
+    connect(UI->tableView_model,SIGNAL(doubleClicked(QModelIndex)),this,SLOT(model_param(QModelIndex)));
+    connect(UI->tableView_model,SIGNAL(clicked(QModelIndex)),this,SLOT(show_tableResult(QModelIndex)));
+//===========================================================================================================
+
+    UI->radioButton_param->setChecked(true);
+    UI->comboBox_state->setEnabled(false);
+    UI->groupBox->setEnabled(false);
+
+    QString mess;
+    if(con_flag == false){
+        mess = "Нет соединения с БД";
+    }
+    else if(con_flag == true){
+        init_treeview();
+    }
+}
+
+DiagnosticSetting::~DiagnosticSetting(){
+	delete UI;
+}
+
+// ======================== инициализация дерева систем и подсистем ======================================
+
+void DiagnosticSetting::init_treeview()
+{
+    QFont font;
+    font.setBold(true);
+    QSqlQuery query;
+    query.exec(QString("SELECT id_system, system_name FROM system where id_parent = 0"));
+    model_ = new QStandardItemModel(this);
+    parentItem = model_->invisibleRootItem();
+    int id_system = 0;
+    while (query.next()){
+        QSqlQuery query_count; // ********
+        query_count.exec(QString("select count(system_name) from system where id_parent = %1").arg(query.value(0).toInt()));
+
+        while (query_count.next()){
+            int g = query_count.value(0).toInt(); //********
+            int id_system = query.value(0).toInt();
+            QString system_name = query.value(1).toString();
+            QStandardItem *item = new QStandardItem(query.value(1).toString() + " ["  + QString::number(g) + "]");
+            QString data_region="system_" + QString::number(id_system) + "_" + system_name;
+            item->setData(data_region,Qt::UserRole);
+            model_->appendRow(item);
+            child_system_objects(item,id_system);
+        }
+    }
+    query.clear();
+
+    model_->setHeaderData(0, Qt::Horizontal,"Наименование");
+    UI->systemtreeView->sortByColumn(0,Qt::AscendingOrder);
+    QStandardItem *item = new QStandardItem(QIcon(":/icons/plusblue.png"),"Добавить систему");
+    item->setFont(font);
+    item->setData(QString("psystem_%1").arg(id_system),Qt::UserRole);
+    model_->appendRow(item);
+    UI->systemtreeView->setModel(model_);
+
+}
+
+void DiagnosticSetting::child_system_objects(QStandardItem *parent_item,int id_parent_system)
+{
+
+    QSqlQuery query;
+    int row = 0;
+    query.exec(QString("SELECT id_system, system_name, id_parent FROM system WHERE id_parent = %1 ORDER BY id_system").arg(id_parent_system));
+
+    if (query.size() == 0){
+
+        }
+        else{
+            while (query.next()){
+            QSqlQuery query_count;
+            query_count.exec(QString("select count(system_name) from system where id_parent = %1 ").arg(query.value(0).toInt()));
+            while (query_count.next()) {
+                int g = query_count.value(0).toInt();
+                int id_object = query.value(0).toInt();
+                QString system_name = query.value(1).toString();
+                if (id_object == id_parent_system)continue;
+                child_system_objects(set_child_item(query.value(1).toString() + " [" + QString::number(g)+ "]",
+                                                    "sys_" + QString::number(id_object) + "_" + QString::number(id_parent_system) + "_" + system_name,
+                                                    parent_item, row),id_object);
+                row++;
+            }
+        }
+    }
+    QFont font;
+    font.setBold(true);
+    set_child_item("Добавить систему",QString("psys_%1").arg(id_parent_system),parent_item,row,":/icons/plusblue.png" ,font);  //preg
+    query.clear();
+}
+
+QStandardItem * DiagnosticSetting::set_child_item(QString item_text,QString user_data,QStandardItem *parent_item,int row)	{
+    QStandardItem *item = new QStandardItem(item_text.toStdString().c_str());
+    item->setData(user_data,Qt::UserRole);
+    parent_item->setChild(row,item);
+    return item;
+}
+
+QStandardItem * DiagnosticSetting::set_child_item(QString item_text,QString user_data,QStandardItem *parent_item,int row,QString icon_path,QFont font)	{
+    QStandardItem *item = new QStandardItem(QIcon(icon_path),item_text.toStdString().c_str());
+    item->setFont(font);
+    item->setData(user_data,Qt::UserRole);
+    parent_item->setChild(row,item);
+    return item;
+}
+
+//=================== клик по системе =======================================================
+void DiagnosticSetting::item_clicked(const QModelIndex &index){
+
+    QFont font;
+    font.setBold(true);
+    QVariant id=index.data(Qt::UserRole);
+    if (id.type() == QVariant::String)
+    {
+        QString user_data=id.toString();
+        QStringList list=user_data.split("_");
+        if(list.value(0)=="psystem"){
+            add_new_system(list.value(1).toInt(),true);
+        }else if(list.value(0)=="psys"){
+            add_new_system(list.value(1).toInt(),false);
+        }else if(list.value(0)=="system"){
+            param_model = modelDB->getParamList(list.value(1).toInt());
+            state_model = modelDB->getStateList(list.value(1).toInt());
+            show_param(list.value(1).toInt(),list.value(2));
+            show_tableModel(list.value(1).toInt(),list.value(2));
+        }else if(list.value(0)=="sys"){
+            param_model = modelDB->getParamList(list.value(1).toInt());
+            state_model = modelDB->getStateList(list.value(1).toInt());
+            show_param(list.value(1).toInt(),list.value(3));
+            show_tableModel(list.value(1).toInt(),list.value(3));
+        }
+    }
+}
+//================================ показать параметры выбранной системы =====================
+void DiagnosticSetting::show_param(int id_system,QString name){
+
+    globalIdSys = id_system;
+    UI->label_nameSystem->setText(name);
+    UI->label_nameSystem_->setText(name);
+    UI->label_nameSystemChek->setText(name);
+    const QString tableName="parametres";
+    const QString tableName_st="state";
+    modelMain->setTable(tableName);
+    modelState->setTable(tableName_st);
+    modelMain->setFilter(QString("id_system = %1").arg(id_system));
+    modelState->setFilter(QString("id_system = %1").arg(id_system));
+    modelMain->select();
+    modelState->select();
+    modelMain->setEditStrategy(QSqlTableModel::OnFieldChange);
+    modelState->setEditStrategy(QSqlTableModel::OnFieldChange);
+
+    UI->tableViewParam->setModel(modelMain);
+    UI->tableViewState->setModel(modelState);
+    UI->tableViewParam->hideColumn(0);
+    UI->tableViewState->hideColumn(0);
+    UI->tableViewParam->hideColumn(1);
+    UI->tableViewState->hideColumn(1);
+    UI->tableViewParam->horizontalHeader()->setSectionResizeMode(3,QHeaderView::Stretch);
+    UI->tableViewState->horizontalHeader()->setSectionResizeMode(3,QHeaderView::Stretch);
+
+   UI->comboBox_param->setModel(param_model);
+ //  UI->comboBox_state->setModel(state_model);
+
+ //  fill_combobox_Subsystem(UI->comboBox_state,id_system);
+    subSystem_model = modelDB->getSubSystemList(id_system);
+    UI->comboBox_state->setModel(subSystem_model);
+    show_cheking(id_system);
+    UI->groupBox->setEnabled(false);
+}
+
+void DiagnosticSetting::show_cheking(int id_system){
+
+    QSqlRelationalTableModel *modelCheck = new QSqlRelationalTableModel(this);
+    const QString tableName="checking";
+    modelCheck->setTable(tableName);
+    QString str = QString("checking.id_system = %1").arg(id_system);
+    modelCheck->setFilter(str);
+    modelCheck->setRelation(2, QSqlRelation("parametres", "id_parametres", "param_name"));
+    modelCheck->setRelation(4, QSqlRelation("system", "id_system", "system_name"));
+
+    modelCheck->setHeaderData(2, Qt::Horizontal, "Параметр",Qt::EditRole);
+    modelCheck->setHeaderData(4, Qt::Horizontal, "Подсистема",Qt::EditRole);
+    modelCheck->setHeaderData(5, Qt::Horizontal, "Ошибка A");
+    modelCheck->setHeaderData(6, Qt::Horizontal, "Ошибка B");
+    modelCheck->setHeaderData(7, Qt::Horizontal, "Длит.");
+    modelCheck->setHeaderData(8, Qt::Horizontal, "Ресурс",Qt::TextAlignmentRole);
+
+    UI->tableView_check->setModel(modelCheck);
+    UI->tableView_check->hideColumn(0);
+    UI->tableView_check->hideColumn(1);
+    UI->tableView_check->hideColumn(3);
+
+    UI->tableView_check->horizontalHeader()->setSectionResizeMode(2,QHeaderView::Stretch);
+    UI->tableView_check->horizontalHeader()->setSectionResizeMode(4,QHeaderView::Stretch);
+    UI->tableView_check->horizontalHeader()->setSectionResizeMode(5,QHeaderView::Stretch);
+    UI->tableView_check->horizontalHeader()->setSectionResizeMode(6,QHeaderView::Stretch);
+    UI->tableView_check->horizontalHeader()->setSectionResizeMode(7,QHeaderView::Stretch);
+    UI->tableView_check->horizontalHeader()->setSectionResizeMode(8,QHeaderView::Stretch);
+    modelCheck->select();
+  //  qDebug() << modelCheck->query().lastQuery();
+    modelCheck->setEditStrategy(QSqlTableModel::OnFieldChange);
+    NoEditableDelegate * delegateNo = new NoEditableDelegate(this);
+    UI->tableView_check->setItemDelegateForColumn(2, delegateNo);
+    UI->tableView_check->setItemDelegateForColumn(4, delegateNo);
+}
+
+void DiagnosticSetting::show_result(int id_check, QTableView * tableview){
+
+    modelRes= new QSqlRelationalTableModel(this);
+    const QString tableName="checking_result";
+    modelRes->setTable(tableName);
+
+    modelRes->setFilter(QString("id_check = %1").arg(id_check));
+    modelRes->setRelation(2, QSqlRelation("state", "id_state", "state_name"));
+    modelRes->select();
+    modelRes->setEditStrategy(QSqlTableModel::OnFieldChange);
+    tableview->setModel(modelRes);
+    tableview->hideColumn(0);
+    tableview->hideColumn(1);
+    tableview->hideColumn(3);
+
+    modelRes->setHeaderData(2, Qt::Horizontal, "Состояние");
+    modelRes->setHeaderData(4, Qt::Horizontal, "Min");
+    modelRes->setHeaderData(5, Qt::Horizontal, "Max");
+    modelRes->setHeaderData(6, Qt::Horizontal, "Точно");
+    modelRes->setHeaderData(7, Qt::Horizontal, "№ рез-та");
+    tableview->horizontalHeader()->setSectionResizeMode(2,QHeaderView::Stretch);
+    tableview->horizontalHeader()->setSectionResizeMode(4,QHeaderView::Stretch);
+    tableview->horizontalHeader()->setSectionResizeMode(5,QHeaderView::Stretch);
+    tableview->horizontalHeader()->setSectionResizeMode(6,QHeaderView::Stretch);
+    tableview->horizontalHeader()->setSectionResizeMode(7,QHeaderView::Stretch);
+
+    NoEditableDelegate * delegateNo = new NoEditableDelegate(this);
+    tableview->setItemDelegateForColumn(2, delegateNo);
+ // QSqlRelationalDelegate *delegat_=new QSqlRelationalDelegate(UI->tableView_result);
+ // UI->tableView_result->setItemDelegateForColumn(2,delegat_);
+
+}
+
+void DiagnosticSetting::show_tableModel(int id_system, QString name){
+
+    UI->label_nameSystemModel->setText(name);
+    model_combo->clear();
+    QStringList header_list, header_vert_list;
+    QSqlQuery query;
+    QList<int> colIdCheck, rowIdState;
+    int col = 1;
+
+    query.exec(QString("SELECT id_check,check_type  FROM checking WHERE id_system = %1").arg(id_system));
+    while(query.next()){
+        int id_check = query.value(0).toInt();
+        QString checkType = query.value(1).toString();
+        colIdCheck.append(id_check);
+        header_list.append(checkType + " " + " " + QString::number(col));
+        col++;
+    }
+
+
+
+    QList<QString> modelList;
+    QSqlQuery query_mod;
+
+    QSqlQuery query_st;
+    query_st.exec(QString("SELECT id_state,state_name FROM state WHERE id_system = %1").arg(id_system));
+    while(query_st.next()){
+        int id_state = query_st.value(0).toInt();
+        QString name = query_st.value(1).toString();
+        rowIdState.append(id_state);
+        header_vert_list.append(name);
+
+        query_mod.exec(QString("SELECT cr.result_number FROM model m, checking_result cr WHERE m.id_state = %1 AND m.id_check_result = cr.id_check_result ").arg(id_state));
+        while(query_mod.next()){
+            QString nameRes = query_mod.value(0).toString();
+            modelList.append(nameRes);
+        }
+    }
+
+    if(modelList.isEmpty()){return;}
+
+    for (int i = 0; i < rowIdState.count(); i++) {
+        QList<QStandardItem*> colList;
+        int count = 0;
+            for(int j = 0; j < colIdCheck.count(); j++) {
+                QStandardItem *item = new QStandardItem();
+                item->setData(colIdCheck.at(j), Qt::UserRole);
+                item->setData(rowIdState.at(i), Qt::UserRole + 1);
+                item->setData(modelList.at(count), Qt::DisplayRole);
+                ComboBoxDelegate *delegate = new ComboBoxDelegate(colIdCheck.at(j),UI->tableView_model);
+                listDelegate.append(delegate);
+                colList.append(item);
+                count++;
+            }
+        model_combo->appendRow(colList);
+    }
+
+    UI->tableView_model->setModel(model_combo);
+    model_combo->setHorizontalHeaderLabels(header_list);
+    model_combo->setVerticalHeaderLabels(header_vert_list);
+
+//    for ( int i = 0; i < model_combo->rowCount(); ++i ){
+//        for ( int y = 0; y < model_combo->columnCount(); ++y ){
+//        UI->tableView_model->openPersistentEditor( model_combo->index(i, y) );
+//     }
+//    }
+}
+
+void DiagnosticSetting::slotWidget(QWidget *editor){
+
+    QComboBox *box = qobject_cast<QComboBox *> (editor);
+    int check_result = box->itemData(box->currentIndex(),Qt::UserRole).toInt();
+
+    if(check_result == 0){
+        return;
+    }
+
+    int state = UI->tableView_model->currentIndex().data(Qt::UserRole + 1).toInt();
+    int check = UI->tableView_model->currentIndex().data(Qt::UserRole).toInt();
+
+    QSqlQuery query;
+
+    if(!query.exec(QString("UPDATE model SET id_check_result = %1 WHERE id_state = %2 AND id_check = %3").arg(check_result).arg(state).arg(check))){
+           QMessageBox::about(this,"Ошибка",query.lastError().text());
+    }
+
+
+    show_result(check,UI->tableView_checkModel);
+}
+//================================ сохранение модели ========================================
+
+void DiagnosticSetting::model_param(const QModelIndex &index){
+
+//    for (int i=0; i<listDelegate.count(); i++){
+//        UI->tableView_model->setItemDelegateForColumn(i,listDelegate.at(i));
+//        connect(listDelegate.at(i),SIGNAL(commitUserData(QWidget*)),this,SLOT(slotWidget(QWidget*)));
+//    }
+
+    int row = index.row();
+    int col = index.column();
+
+    GLid_check = index.data(Qt::UserRole).toInt();
+    GLid_state = index.data(Qt::UserRole + 1).toInt();
+
+    UI->tableView_model->setItemDelegateForColumn(col,listDelegate.at(col));
+    UI->tableView_model->openPersistentEditor(model_combo->index(row, col));
+    connect(listDelegate.at(col),SIGNAL(commitUserData(QWidget*)),this,SLOT(slotWidget(QWidget*)));
+
+}
+void DiagnosticSetting::show_tableResult(const QModelIndex &index){
+
+    int row = index.row();
+    int col = index.column();
+
+    int _check = index.data(Qt::UserRole).toInt();
+
+    show_result(_check,UI->tableView_checkModel);
+
+}
+//================================ добавление параметров ====================================
+void DiagnosticSetting::add_param_row(){
+
+    if(globalIdSys == 0){
+       QMessageBox::StandardButton ret;
+       ret = QMessageBox::critical (this,"Ошибка",("Необходимо выбрать систему"),QMessageBox::Ok );
+    }
+
+    int row = modelMain->rowCount();
+    QSqlQuery query;
+    int id_par = 1;
+    QString nameParam = "отсутствует";
+    if (row ==0){
+        query.prepare("INSERT INTO parametres (id_parametres,param_name) VALUES (?,?);");
+        query.addBindValue(id_par);
+        query.addBindValue(nameParam);
+    }
+
+    if(!query.exec()){
+
+    }
+
+    modelMain->insertRow(modelMain->rowCount());
+    modelMain->setData(modelMain->index(row,1),globalIdSys);
+    UI->tableViewParam->selectRow(row);
+    modelMain->submitAll();
+}
+//================================ MODEL =================================================
+void DiagnosticSetting::add_modelMatrix(){
+
+    int id,id_st,id_rs;
+    QSqlQuery queryDel;
+    queryDel.prepare("DELETE FROM model WHERE id_system = ?");
+    queryDel.addBindValue(globalIdSys);
+
+    if(!queryDel.exec())
+    {
+        QString err = queryDel.lastError().text();
+        return;
+    }
+
+
+    QSqlQuery query;
+    QSqlQuery query_;
+    QSqlQuery query_r;
+    query_.exec(QString("SELECT ch.id_check,st.id_state FROM checking ch, state st WHERE ch.id_system = %1 AND ch.id_system = st.id_system").arg(globalIdSys));
+    while(query_.next()){
+        id = query_.value(0).toInt();
+        id_st = query_.value(1).toInt();
+            query_r.exec(QString("SELECT id_check_result FROM checking_result WHERE id_check = %1").arg(id));
+
+            while(query_r.next()){
+
+                id_rs = query_r.value(0).toInt();
+
+            }
+            query.prepare("INSERT INTO model (id_system,id_state,id_check,id_check_result) VALUES (?,?,?,?);");
+            query.addBindValue(globalIdSys);
+            query.addBindValue(id_st);
+            query.addBindValue(id);
+            query.addBindValue(id_rs);
+
+            if(!query.exec()){
+
+            }
+    }
+
+
+}
+
+
+//================================ удаление параметров ====================================
+void DiagnosticSetting::del_param_row(){
+
+    int row = UI->tableViewParam->currentIndex().row();
+    modelMain->removeRow(row);
+    modelMain->submitAll();
+    show_param(globalIdSys, UI->label_nameSystem->text());
+}
+
+//================================ добавление состояния ====================================
+void DiagnosticSetting::add_state_row(){
+
+    if(globalIdSys == 0){
+       QMessageBox::StandardButton ret;
+       ret = QMessageBox::critical (this,"Ошибка",("Необходимо выбрать систему"),QMessageBox::Ok );
+       return;
+    }
+
+    int id_state = 0;
+    QSqlQuery query_,query;
+    query_.exec(QString("SELECT id_state FROM state WHERE id_state = 1"));
+    while(query_.next()){
+        id_state = query_.value(0).toInt();
+    }
+
+    if(id_state == 0){
+        query.prepare("INSERT INTO state (id_state, state_name, state_desc) VALUES (?,?,?);");
+        query.addBindValue(1);
+        query.addBindValue("отсутствует");
+        query.addBindValue("");
+    }
+
+    if(!query.exec()){
+
+    }
+
+    int row = modelState->rowCount();
+    modelState->insertRow(modelState->rowCount());
+    modelState->setData(modelState->index(row,1),globalIdSys);
+    UI->tableViewState->selectRow(row);
+    modelState->submitAll();
+}
+//================================ удаление состояния ====================================
+void DiagnosticSetting::del_state_row(){
+
+    int row = UI->tableViewState->currentIndex().row();
+    modelState->removeRow(row);
+    modelState->submitAll();
+    show_param(globalIdSys, UI->label_nameSystem_->text());
+}
+//================================ tab ===================================================
+void DiagnosticSetting::start_checking(int tab){
+
+}
+//==================== проверка параметров ====================
+void DiagnosticSetting::checking_param(bool radio){
+
+    if (radio == true){
+        UI->comboBox_state->setEnabled(false);
+        UI->comboBox_param->setEnabled(true);
+    }else{
+        UI->comboBox_param->setEnabled(false);
+        UI->comboBox_state->setEnabled(true);
+    }
+}
+
+//==================== проверка состояния =====================
+void DiagnosticSetting::checking_state(bool radio){
+
+    if (radio == true){
+        UI->comboBox_state->setEnabled(true);
+        UI->comboBox_param->setEnabled(false);
+    }else{
+        UI->comboBox_param->setEnabled(true);
+        UI->comboBox_state->setEnabled(false);
+    }
+}
+//======================= добавление проверок в таблицу CHECKING =================
+void DiagnosticSetting::checking_record(){
+
+    int id_system = globalIdSys;
+    int id_param = UI->comboBox_param->itemData(UI->comboBox_param->currentIndex(),Qt::UserRole).toInt();
+    int id_subsys = UI->comboBox_state->itemData(UI->comboBox_state->currentIndex(),Qt::UserRole).toInt();
+    double alpha = UI->lineEdit_alpha->text().toDouble();
+    double beta = UI->lineEdit_beta->text().toDouble();
+    double durat = UI->lineEdit_durat->text().toDouble();
+    double resource = UI->lineEdit_resource->text().toDouble();
+
+    QString check_type;
+    QSqlQuery query;
+
+    if(UI->radioButton_param->isChecked()){
+        check_type = "Параметр";
+        if (id_param == 0){
+            QMessageBox::about(this,"Ошибка","Отсутствует параметр");
+            return;
+        }
+        int id_subsystem = 1;
+        query.prepare("INSERT INTO checking(id_system,id_parametres,check_type,id_subsytem,alpha,beta,duration,resource) VALUES (?,?,?,?,?,?,?,?)");
+        query.addBindValue(id_system);
+        query.addBindValue(id_param);
+        query.addBindValue(check_type);
+        query.addBindValue(id_subsystem);
+        query.addBindValue(alpha);
+        query.addBindValue(beta);
+        query.addBindValue(durat);
+        query.addBindValue(resource);
+        }
+    else{
+        check_type = "Состояние";
+        if (id_subsys == 0){
+            QMessageBox::about(this,"Ошибка","Отсутствует подсистема");
+            return;
+        }
+        id_param = 1;
+        query.prepare("INSERT INTO checking(id_system,id_parametres, check_type,id_subsytem,alpha,beta,duration,resource) VALUES (?,?,?,?,?,?,?,?);");
+        query.addBindValue(id_system);
+        query.addBindValue(id_param);
+        query.addBindValue(check_type);
+        query.addBindValue(id_subsys);
+        query.addBindValue(alpha);
+        query.addBindValue(beta);
+        query.addBindValue(durat);
+        query.addBindValue(resource);
+        }
+        if(!query.exec())
+        {
+            QMessageBox::about(this,"Ошибка",query.lastError().text());
+        }
+
+       add_modelMatrix();
+
+        show_cheking(id_system);
+        UI->lineEdit_alpha->clear();
+        UI->lineEdit_beta->clear();
+        UI->lineEdit_durat->clear();
+        UI->lineEdit_resource->clear();
+
+}
+//======================= добавление результатов по выбранной проверке в CHECK_RESULT =============
+void DiagnosticSetting::checking_result(){
+
+    QModelIndex index = UI->tableView_check->currentIndex();
+    int row = index.row();
+
+    index = UI->tableView_check->model()->index(row,0,QModelIndex());
+    int id_check = UI->tableView_check->model()->data(index,Qt::DisplayRole).toInt();
+
+    int id_state  = UI->comboBox_resultSybsystem->itemData(UI->comboBox_resultSybsystem->currentIndex()).toInt();
+    int result = UI->comboBox_numRes->itemData(UI->comboBox_numRes->currentIndex(),Qt::DisplayRole).toInt();
+
+    QString check_type;
+    if (UI->radioButton_max->isChecked()){
+        check_type = "больше";
+    } else if(UI->radioButton_min->isChecked()){
+        check_type = "меньше";
+    } else if(UI->radioButton_bw->isChecked()){
+        check_type = "между";
+    } else if(UI->radioButton_av->isChecked()){
+        check_type = "точно";
+    } else if (UI->radioButton_st->isChecked()){
+        check_type = "состояние";
+    }
+
+    double max = UI->lineEdit_Max->text().toDouble();
+    double min = UI->lineEdit_Min->text().toDouble();
+    double av = UI->lineEdit_Av->text().toDouble();
+
+    if (id_check == 0){
+        QMessageBox::about(this,"Ошибка","Не выбрана проверка");
+    }
+    //============ заменить ====================================
+    if (id_state == 0){id_state = 1;}
+    //==========================================================
+    QSqlQuery query;
+    query.prepare("INSERT INTO checking_result(id_check,id_state,check_type,check_min,check_max,check_accuracy,result_number) VALUES (?,?,?,?,?,?,?)");
+    query.addBindValue(id_check);
+    query.addBindValue(id_state);
+    query.addBindValue(check_type);
+    query.addBindValue(min);
+    query.addBindValue(max);
+    query.addBindValue(av);
+    query.addBindValue(result);
+
+    if(!query.exec())
+    {
+        QMessageBox::about(this,"Ошибка",query.lastError().text());
+    }
+
+    show_result(id_check,UI->tableView_result);
+    UI->lineEdit_Max->clear();
+    UI->lineEdit_Min->clear();
+    UI->lineEdit_Av->clear();
+
+}
+
+void DiagnosticSetting::enter_param(const QModelIndex &index){
+
+    int row = index.row();
+    globalcheck =  UI->tableView_check->model()->index(row,0).data(Qt::DisplayRole).toInt();
+
+    int check_type = modelDB->getIdParametres(globalcheck);
+    id_subSystemGlob = modelDB->getIdSub(globalcheck);
+
+    UI->groupBox->setEnabled(true);
+
+    show_result(globalcheck,UI->tableView_result);
+ //   UI->comboBox_resultSybsystem->setModel(state_model);
+    //если нет параметра, то результат типа СОСТОЯНИЕ
+    if (check_type == 1){
+        fill_combobox_Subsystem(UI->comboBox_resultSybsystem,id_subSystemGlob);
+        UI->radioButton_st->setChecked(true);
+        UI->radioButton_st->setEnabled(true);
+        UI->radioButton_max->setEnabled(false);
+        UI->radioButton_min->setEnabled(false);
+        UI->radioButton_av->setEnabled(false);
+        UI->radioButton_bw->setEnabled(false);
+        UI->comboBox_resultSybsystem->setEnabled(true);
+    }else {
+        UI->comboBox_resultSybsystem->setEnabled(false);
+        fill_combobox_Subsystem(UI->comboBox_resultSybsystem,id_subSystemGlob);
+        UI->radioButton_min->setChecked(true);
+        UI->radioButton_st->setEnabled(false);
+        UI->radioButton_max->setEnabled(true);
+        UI->radioButton_min->setEnabled(true);
+        UI->radioButton_av->setEnabled(true);
+        UI->radioButton_bw->setEnabled(true);
+    }
+}
+
+//================================ правый клик ==============================================
+void DiagnosticSetting::customMenuTree(const QPoint & pos){
+    QModelIndex index = UI->systemtreeView->currentIndex();
+    if(!index.data(Qt::UserRole).toBool()) return;
+    QVariant id = index.data(Qt::UserRole);
+    if (id.type() == QVariant::String){
+        QString user_data = id.toString();
+        QStringList list= user_data.split("_");
+        if(list.value(0)=="system" || list.value(0)=="sys") {
+            QPushButton *popupButton = new QPushButton;
+            QMenu *menu = new QMenu(this);
+
+            QAction *act_edit=new QAction("Редактировать",this);
+            act_edit->setIcon(QIcon(":/icons/edit.png"));
+            connect(act_edit,SIGNAL(triggered()),this,SLOT(editName_system()));
+
+            QAction *act_del=new QAction("Удалить систему",this);
+            act_del->setIcon(QIcon(":/icons/close.png"));
+            connect(act_del,SIGNAL(triggered()),this,SLOT(delete_system()));
+
+            menu->addAction(act_edit);
+            menu->addSeparator();
+            menu->addAction(act_del);
+            popupButton->setMenu(menu);
+            menu->exec(QCursor::pos());
+        }
+    }
+}
+
+void DiagnosticSetting::customMenuTableCheck(const QPoint & pos){
+
+    QModelIndex index = UI->tableView_check->currentIndex();
+
+    int row = index.row();
+
+    index = UI->tableView_check->model()->index(row,0,QModelIndex());
+    id_checkDel = UI->tableView_check->model()->data(index,Qt::DisplayRole).toInt();
+
+    QVariant id = index.data(Qt::UserRole);
+
+    QPushButton *popupButton = new QPushButton;
+    QMenu *menu = new QMenu(this);
+
+    QAction *act_del=new QAction("Удалить проверку",this);
+    act_del->setIcon(QIcon(":/icons/close.png"));
+    connect(act_del,SIGNAL(triggered()),this,SLOT(delete_checking()));
+
+    menu->addAction(act_del);
+    popupButton->setMenu(menu);
+    menu->exec(QCursor::pos());
+}
+
+void DiagnosticSetting::customMenuTableResult(const QPoint & pos){
+
+    QModelIndex index = UI->tableView_result->currentIndex();
+    int row = index.row();
+
+    index = UI->tableView_result->model()->index(row,0,QModelIndex());
+    id_resDel = UI->tableView_result->model()->data(index,Qt::DisplayRole).toInt();
+
+    QPushButton *popupButton = new QPushButton;
+    QMenu *menu = new QMenu(this);
+
+    QAction *act_del=new QAction("Удалить результат",this);
+    act_del->setIcon(QIcon(":/icons/close.png"));
+    connect(act_del,SIGNAL(triggered()),this,SLOT(delete_result()));
+
+    menu->addAction(act_del);
+    popupButton->setMenu(menu);
+    menu->exec(QCursor::pos());
+}
+//================================= Добавление - Удаление системы =================
+void DiagnosticSetting::add_new_system(int id_sys, bool is_parent){
+
+    int id_system = id_sys;
+    bool id_parent = is_parent;
+    add_system = new QDialog();
+    add_system->setMinimumSize(500,200);
+    add_system->setWindowTitle("Добавить систему");
+    add_system->setWindowIcon(QIcon(":/icons/add.png"));
+
+    blok_name = new QLabel("Наименование cистемы:");
+    blok_name->setMinimumWidth(100);
+
+    blok_filepath_edit = new QLineEdit();
+    blok_name_edit = new QLineEdit();
+
+
+    ok_button = new QPushButton("Ок");
+    connect(ok_button,SIGNAL(clicked()),add_system,SLOT(accept()));
+    cancel_button = new QPushButton("Отмена");
+    connect(cancel_button,SIGNAL(clicked()),add_system,SLOT(close()));
+
+    QHBoxLayout *buttons_layout = new QHBoxLayout();
+    buttons_layout->addWidget(ok_button);
+    buttons_layout->addWidget(cancel_button);
+
+    QHBoxLayout *path_layout = new QHBoxLayout();
+    path_layout->addWidget(blok_name_edit);
+
+    QHBoxLayout *name_layout = new QHBoxLayout();
+    name_layout->addWidget(blok_name);
+
+    QGridLayout *mainLayout = new QGridLayout;
+    mainLayout->setSizeConstraint(QLayout::SetFixedSize);
+    mainLayout->addLayout(name_layout, 0, 0);
+    mainLayout->addLayout(path_layout, 0, 1);
+    mainLayout->addLayout(buttons_layout, 1, 1);
+
+    add_system->setLayout(mainLayout);
+
+    if(add_system->exec() == QDialog::Accepted)
+    {
+
+        QModelIndex index = UI->systemtreeView->currentIndex();
+        QString id = index.data(Qt::UserRole).toString();
+        QStringList list = id.split("_");
+        int id_par = 0;
+        QString f = blok_name_edit->text();
+        QSqlQuery query;
+        if (id_parent == true){
+            query.prepare("INSERT INTO system (id_parent,system_name) VALUES (?,?);");
+            query.addBindValue(id_par);
+            query.addBindValue(f);
+        }
+        else {
+            query.prepare("INSERT INTO system (id_parent, system_name) VALUES (?,?)");
+            query.addBindValue(id_system);
+            query.addBindValue(f);
+        }
+        if(!query.exec())
+        {
+            QMessageBox::about(this,"Ошибка",query.lastError().text());
+        }
+        init_treeview();
+    }
+}
+
+void DiagnosticSetting::delete_result(){
+
+    QMessageBox msgBox;
+    msgBox.setWindowTitle("Предупреждуние");
+    msgBox.setText("Вы действительно хотите удалить результат?");
+    msgBox.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+    msgBox.setButtonText(QMessageBox::Yes, "Да");
+    msgBox.setButtonText(QMessageBox::No, "Нет");
+    switch (msgBox.exec()) {
+    case QMessageBox::Yes:
+        // yes was clicked
+        break;
+    case QMessageBox::No:
+        return;
+        break;
+    default:
+        return;
+        break;
+    }
+
+    QSqlQuery query;
+    QString str;
+    str = QString("DELETE FROM checking_result WHERE id_check_result = %1").arg(id_resDel);
+
+    if((!query.exec(str))){
+        return;
+    }
+    show_result(globalcheck,UI->tableView_result);
+}
+
+void DiagnosticSetting::delete_checking(){
+
+    QMessageBox msgBox;
+    msgBox.setWindowTitle("Предупреждуние");
+    msgBox.setText("Вы действительно хотите удалить проверку?");
+    msgBox.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+    msgBox.setButtonText(QMessageBox::Yes, "Да");
+    msgBox.setButtonText(QMessageBox::No, "Нет");
+    switch (msgBox.exec()) {
+    case QMessageBox::Yes:
+        // yes was clicked
+        break;
+    case QMessageBox::No:
+        return;
+        break;
+    default:
+        return;
+        break;
+    }
+
+    QSqlQuery query;
+    QString str;
+    str = QString("DELETE FROM checking WHERE id_check = %1").arg(id_checkDel);
+
+    if((!query.exec(str))){
+        return;
+    }
+    show_cheking(globalIdSys);
+}
+
+void DiagnosticSetting::delete_system(){
+
+    QModelIndex index = UI->systemtreeView->currentIndex();
+    if(!index.data(Qt::UserRole).toBool()) return;
+    QString id_system = index.data(Qt::UserRole).toString();
+    QStringList list = id_system.split("_");
+
+    QMessageBox msgBox;
+    msgBox.setWindowTitle("Предупреждуние");
+    msgBox.setText("Вы действительно хотите удалить систему?");
+    msgBox.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+    msgBox.setButtonText(QMessageBox::Yes, "Да");
+    msgBox.setButtonText(QMessageBox::No, "Нет");
+    switch (msgBox.exec()) {
+    case QMessageBox::Yes:
+        // yes was clicked
+        break;
+    case QMessageBox::No:
+        return;
+        break;
+    default:
+        return;
+        break;
+    }
+
+    QSqlQuery query;
+    QString str;
+    str = QString("DELETE FROM system WHERE id_system = %1").arg(list.value(1).toInt());
+
+    if((!query.exec(str))){
+        return;
+    }
+
+    init_treeview();
+    modelMain->clear();
+    modelState->clear();
+    state_model->clear();
+    param_model->clear();
+    subSystem_model->clear();
+    UI->label_nameSystem->clear();
+    UI->label_nameSystem_->clear();
+    UI->label_nameSystemChek->clear();
+}
+
+void DiagnosticSetting::editName_system(){
+
+    QModelIndex index = UI->systemtreeView->currentIndex();
+    if(!index.data(Qt::UserRole).toBool()) return;
+    QString name_all = index.data(Qt::UserRole).toString();
+    QStringList list = name_all.split("_");
+    int id_sys = 0;
+    QString system_name;
+
+    if(list.value(0) == "system"){
+       id_sys = list.value(1).toInt();
+       system_name = list.value(2);
+    }else if(list.value(0) == "sys"){
+       id_sys = list.value(1).toInt();
+       system_name = list.value(3);
+    }
+
+    add_system = new QDialog();
+    add_system->setMinimumSize(500,200);
+    add_system->setWindowTitle("Редактировать систему");
+    add_system->setWindowIcon(QIcon(":/icons/edit.png"));
+
+    blok_name = new QLabel("Наименование cистемы:");
+    blok_name->setMinimumWidth(100);
+
+    blok_name_edit = new QLineEdit(system_name);
+
+    ok_button = new QPushButton("Ок");
+    connect(ok_button,SIGNAL(clicked()),add_system,SLOT(accept()));
+    cancel_button = new QPushButton("Отмена");
+    connect(cancel_button,SIGNAL(clicked()),add_system,SLOT(close()));
+
+    QHBoxLayout *buttons_layout = new QHBoxLayout();
+    buttons_layout->addWidget(ok_button);
+    buttons_layout->addWidget(cancel_button);
+
+    QHBoxLayout *path_layout = new QHBoxLayout();
+    path_layout->addWidget(blok_name_edit);
+
+    QHBoxLayout *name_layout = new QHBoxLayout();
+    name_layout->addWidget(blok_name);
+
+    QGridLayout *mainLayout = new QGridLayout;
+    mainLayout->setSizeConstraint(QLayout::SetFixedSize);
+    mainLayout->addLayout(name_layout, 0, 0);
+    mainLayout->addLayout(path_layout, 0, 1);
+    mainLayout->addLayout(buttons_layout, 1, 1);
+
+    add_system->setLayout(mainLayout);
+
+    if(add_system->exec() == QDialog::Accepted)
+    {
+        QSqlQuery query;
+        query.prepare("UPDATE system SET system_name = ? WHERE id_system = ?");
+        query.addBindValue(blok_name_edit->text());
+        query.addBindValue(id_sys);
+
+        if(!query.exec())
+        {
+            QMessageBox::about(this,"Ошибка",query.lastError().text());
+        }
+        init_treeview();
+        UI->label_nameSystem->clear();
+        UI->label_nameSystem_->clear();
+        UI->label_nameSystemChek->clear();
+    }
+}
+//==================================== комбооксы =====================================================
+
+void DiagnosticSetting::fill_combobox_Subsystem(QComboBox *box, int id_system)
+{
+
+    if(id_system == 0){
+        box->clear();
+        box->addItem("-");
+    }else{
+    box->clear();
+    QSqlQuery query;
+    //box->addItem("-");
+    query.exec(QString("SELECT id_state, state_name FROM state WHERE id_system=%1").arg(id_system));
+
+    while (query.next()){
+
+        QString state_name = query.value(1).toString();
+        int id_state = query.value(0).toInt();
+        box->addItem(state_name,id_state);
+    }
+    query.clear();
+    }
+}

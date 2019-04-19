@@ -1,0 +1,36 @@
+<RCC>
+    <qresource prefix="/">
+        <file>icons/_next_item.png</file>
+        <file>icons/accept.png</file>
+        <file>icons/add.png</file>
+        <file>icons/add_1.png</file>
+        <file>icons/cancel.png</file>
+        <file>icons/close.png</file>
+        <file>icons/connect.png</file>
+        <file>icons/delete.png</file>
+        <file>icons/edit.png</file>
+        <file>icons/expand.png</file>
+        <file>icons/export_qualifier.png</file>
+        <file>icons/import_qualifier.png</file>
+        <file>icons/plusblue.png</file>
+        <file>icons/random.png</file>
+        <file>icons/rubric.png</file>
+        <file>icons/rubric_item.png</file>
+        <file>icons/save_as.png</file>
+        <file>icons/settings.png</file>
+        <file>icons/sqlite.png</file>
+        <file>icons/Stop.png</file>
+        <file>icons/unsystem.png</file>
+        <file>icons/reload.png</file>
+        <file>icons/test.png</file>
+        <file>icons/Connect To.png</file>
+        <file>icons/Ease of Access.png</file>
+        <file>icons/RegEdit.png</file>
+        <file>icons/Libraries.png</file>
+        <file>icons/database.png</file>
+        <file>icons/itestserver.png</file>
+        <file>icons/statistic_48x48.png</file>
+        <file>icons/up.png</file>
+        <file>icons/ВСРФ.png</file>
+    </qresource>
+</RCC>
