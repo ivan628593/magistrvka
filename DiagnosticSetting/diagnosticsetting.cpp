@@ -181,12 +181,26 @@ void DiagnosticSetting::show_param(int id_system,QString name){
     modelMain->select();
     modelMain->setEditStrategy(QSqlTableModel::OnFieldChange);
 
+
+
     UI->tableViewParam->setModel(modelMain);
     UI->tableViewParam->hideColumn(0);
     UI->tableViewParam->hideColumn(1);
     UI->tableViewParam->horizontalHeader()->setSectionResizeMode(3,QHeaderView::Stretch);
     subSystem_model = modelDB->getSubSystemList(id_system);
     show_cheking(id_system);
+
+
+    //==========================закраска==============================================//
+   if(id_system==20){
+
+   // UI->tableViewParam->setStyleSheet("QTableView:last:item{background: rgb(191,255,255);}");
+   }
+
+
+
+    //==========================закраска=============================================//
+
 }
 //================================ показать проверки для системы =====================
 void DiagnosticSetting::show_cheking(int id_system){
@@ -228,6 +242,10 @@ void DiagnosticSetting::del_param_row(){
     modelMain->submitAll();
     show_param(globalIdSys, UI->label_nameSystem->text());
 }
+
+
+
+
 //===============================принятие решения========================================к
 void DiagnosticSetting::reshenie()
 {
@@ -239,7 +257,7 @@ void DiagnosticSetting::reshenie()
         //продолжаем работать
 
 
-        UI->label_3->setText("Продолжаем работать");
+        UI->label_3->setText("Продолжаем работать.");
         UI->label_3->setStyleSheet("QLabel {background-color : green; color : black}");
     }
     else if(sys<=0.98&&sys>=0.96){
@@ -256,14 +274,14 @@ void DiagnosticSetting::reshenie()
             query2.next();
             QString system_name = query2.value(1).toString();
             QString parent = query2.value(2).toString();
-
-            QString str = "Необходимо заменить элемент "+system_name;
-            if(parent=="21"){
-                str = str+" из 1 стойки";
-            }else if(parent=="22" ){
-                str = str+" из 2 стойки";
-            }
-            str = str + "\nНет ЗИП!";
+            system_name= system_name.split(" ")[1];
+            QString str = "Необходимо повысить надежность блока "+system_name;
+//            if(parent=="21"){
+//                str = str+" из 1 стойки";
+//            }else if(parent=="22" ){
+//                str = str+" из 2 стойки";
+//            }
+            str = str + ".\nЗИП отсутствует.";
             UI->label_3->setText(str);
             UI->label_3->setStyleSheet("QLabel {background-color : red; color : black}");
 
@@ -277,12 +295,12 @@ void DiagnosticSetting::reshenie()
             QString system_name = query2.value(1).toString();
             QString parent = query2.value(2).toString();
 
-            QString str = "Заменить элемент "+system_name;
-            if(parent=="21"){
-                str = str+" из 1 стойки";
-            }else if(parent=="22" ){
-                str = str+" из 2 стойки";
-            }
+            QString str = "Заменить "+system_name+" на блок надежней из состава ЗИП.";
+//            if(parent=="21"){
+//                str = str+" из 1 стойки";
+//            }else if(parent=="22" ){
+//                str = str+" из 2 стойки";
+//            }
 
             UI->label_3->setText(str);
             UI->label_3->setStyleSheet("QLabel {background-color : yellow; color : black}");
@@ -294,7 +312,7 @@ void DiagnosticSetting::reshenie()
         //остановить работу ремонт
 
 
-        UI->label_3->setText("Остановить работу\nНеобходим ремонт");
+        UI->label_3->setText("КГ ниже требуемого значения.\nСпланировать мероприятия по повышению готовности.");
         UI->label_3->setStyleSheet("QLabel {background-color : red; color : black}");
     }
     }
